@@ -59,6 +59,9 @@ On execution, set the following parameters:
 
 If all goes well, a successful execution of this contract looks like [this (Ropsten testnet)](https://ropsten.etherscan.io/tx/0xc1da19c7a5e189b372ec3b310453d7ee267da5df661ee61833230470e5b97fd8).
 
+## Updates
+- Added V2 contract for a more recent deployment.
+- Expected to provide more promising results for arbitraging with flash loans.
 
 ## Tips for further customization
 - This contract would typically be executed by a Web3py bot (beyond this scope) via a web3.eth.Contract() call, referencing the deployed address of this contract and its corresponding ABI. You would usually get the bot to interact with price aggregators such as [1inch](https://1inch.exchange) to assess arb opportunities and execute this contract if the right opportunity is found.
@@ -68,16 +71,14 @@ If all goes well, a successful execution of this contract looks like [this (Rops
 - There are no direct ETH pairs in UniswapV2 therefore the need for a WETH wrapper. Since Sushiswap is forked from UniswapV2 you'll need to wrap in WETH as well.
 
 ## Connect with me
-If you appreciate this, feel free to follow me on:
+If you appreciate this, leave the repo a star and feel free to follow me on:
 
 [![Manuel Twitter](https://img.shields.io/badge/Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white)](https://twitter.com/manuelinfoec)
-[![Manuel Infosec YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/c/ManuelInfosec)
 [![Chiemezie Njoku Linkedin](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/manuelinfosec/)
 [![Manuel Medium](https://img.shields.io/badge/Medium-000000?style=for-the-badge&logo=medium&logoColor=white)](https://manuelinfosec.medium.com/)
 
 ## Appreciation
-You could also donate (send funds):
+You could also donate:
 
 Ethereum/Binance Smart Chain/Polygon/Avalanche/etc address: 0xE882D838eF07e796bf6b19636931F143e3eC4Dc3
 <br /><br />
-
