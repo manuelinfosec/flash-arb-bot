@@ -1,190 +1,158 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.6.12;
+pragma solidity ^0.8.10;
 
-/**
-    Ropsten instances:
-    - Uniswap V2 Router:                    0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D
-    - Sushiswap V1 Router:                  No official sushi routers on testnet
-    - DAI:                                  0xf80A32A835F79D7787E8a8ee5721D0fEaFd78108
-    - ETH:                                  0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE
-    - Aave LendingPoolAddressesProvider:    0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728
-    
-    Mainnet instances:
-    - Uniswap V2 Router:                    0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D
-    - Sushiswap V1 Router:                  0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F
-    - DAI:                                  0x6B175474E89094C44Da98b954EedeAC495271d0F
-    - ETH:                                  0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE
-    - Aave LendingPoolAddressesProvider:    0x24a42fD28C976A61Df5D00D0599C34c4f90748c8
-*/
-
-// importing flash loan dependencies as per https://docs.aave.com/developers/tutorials/performing-a-flash-loan/...-with-remix
 import "https://github.com/aave/flashloan-box/blob/Remix/contracts/aave/FlashLoanReceiverBase.sol";
 import "https://github.com/aave/flashloan-box/blob/Remix/contracts/aave/ILendingPoolAddressesProvider.sol";
 import "https://github.com/aave/flashloan-box/blob/Remix/contracts/aave/ILendingPool.sol";
-
-// importing both Sushiswap V1 and Uniswap V2 Router02 dependencies
 import "https://github.com/sushiswap/sushiswap/blob/master/contracts/uniswapv2/interfaces/IUniswapV2Router02.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/math/SafeMath.sol";
+import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol";
+import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/IERC20.sol";
 
-contract FlashArbBot is FlashLoanReceiverBase {
+contract FlashArbBot is FlashLoanReceiverBase, Ownable {
 
-    using SafeMath for uint256;
-    IUniswapV2Router02 uniswapV2Router;
-    IUniswapV2Router02 sushiswapV1Router;
-    uint deadline;
-    IERC20 dai;
-    address daiTokenAddress;
-    uint256 amountToTrade;
-    uint256 tokensOut;
-    
-    /**
-        Initialize deployment parameters
-     */
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    IUniswapV2Router02 public immutable sushiswapV1Router;
+
+    // Struct to hold parameters passed through Aave's flash loan callback
+    // This avoids saving variables to state, saving massive amounts of gas.
+    struct ArbParams {
+        address assetToFlashLoan;  // e.g., WETH
+        address targetAsset;       // e.g., DAI
+        uint256 amountToTrade;
+    }
+
     constructor(
         address _aaveLendingPool, 
-        IUniswapV2Router02 _uniswapV2Router, 
-        IUniswapV2Router02 _sushiswapV1Router
-        ) FlashLoanReceiverBase(_aaveLendingPool) public {
-
-            // instantiate SushiswapV1 and UniswapV2 Router02
-            sushiswapV1Router = IUniswapV2Router02(address(_sushiswapV1Router));
-            uniswapV2Router = IUniswapV2Router02(address(_uniswapV2Router));
-
-            // setting deadline to avoid mining wait
-            deadline = block.timestamp + 300; // 5 minutes
+        address _uniswapV2Router, 
+        address _sushiswapV1Router
+    ) FlashLoanReceiverBase(_aaveLendingPool) {
+        // Instantiate Routers
+        uniswapV2Router = IUniswapV2Router02(_uniswapV2Router);
+        sushiswapV1Router = IUniswapV2Router02(_sushiswapV1Router);
     }
-    
+
     /**
-        Mid-flashloan logic i.e. what you do with the temporarily acquired flash liquidity
+     * @dev Initiates the flash loan
+     */
+    function requestFlashLoan(
+        address _assetToFlashLoan, 
+        uint256 _flashAmount,
+        address _targetAsset,
+        uint256 _amountToTrade
+    ) external onlyOwner {
+        
+        // Encode our custom parameters to send to Aave
+        bytes memory params = abi.encode(
+            ArbParams({
+                assetToFlashLoan: _assetToFlashLoan,
+                targetAsset: _targetAsset,
+                amountToTrade: _amountToTrade
+            })
+        );
+
+        ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
+        
+        // Request the flash loan
+        lendingPool.flashLoan(
+            address(this), 
+            _assetToFlashLoan, 
+            _flashAmount, 
+            params
+        );
+    }
+
+    /**
+     * @dev Aave callback function. Executes after funds are received.
      */
     function executeOperation(
         address _reserve,
         uint256 _amount,
         uint256 _fee,
         bytes calldata _params
-    )
-        external
-        override
-    {
+    ) external override returns (bool) {
         require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance");
 
-        // execute arbitrage strategy
-        try this.executeArbitrage() {
-        } catch Error(string memory) {
-            // Reverted with a reason string provided
-        } catch (bytes memory) {
-            // failing assertion
-        }
+        // Decode the parameters we packed in requestFlashLoan
+        ArbParams memory decodedParams = abi.decode(_params, (ArbParams));
 
-        // return the flash loan plus Aave's flash loan fee back to the lending pool
-        uint totalDebt = _amount.add(_fee);
+        // Calculate dynamic deadline (Fix for Bug #1)
+        uint256 deadline = block.timestamp + 300; 
+
+        // Execute the arbitrage logic
+        _executeArbitrage(decodedParams, deadline);
+
+        // Calculate total debt and approve Aave to pull the funds back
+        uint256 totalDebt = _amount + _fee;
+        
+        // Ensure we have enough balance to repay the loan
+        require(IERC20(_reserve).balanceOf(address(this)) >= totalDebt, "Arbitrage failed: Not enough profit to repay loan");
+
         transferFundsBackToPoolInternal(_reserve, totalDebt);
+        
+        return true;
     }
 
     /**
-        The specific cross protocol swaps that makes up your arb strategy
-        UniswapV2 -> SushiswapV1 example below
+     * @dev Core Arbitrage Logic: Swap on Uni, Swap back on Sushi
      */
-    function executeArbitrage() public {
+    function _executeArbitrage(ArbParams memory params, uint256 deadline) internal {
+        
+        IERC20 baseAsset = IERC20(params.assetToFlashLoan);
+        IERC20 targetAsset = IERC20(params.targetAsset);
 
-        // Trade 1: Execute swap of Ether into designated ERC20 token on UniswapV2
-        try uniswapV2Router.swapETHForExactTokens{ 
-            value: amountToTrade 
-        }(
-            amountToTrade, 
-            getPathForETHToToken(daiTokenAddress), 
-            address(this), 
+        // --- TRADE 1: UNISWAP ---
+        // Approve Uniswap to spend the flash-loaned asset
+        baseAsset.approve(address(uniswapV2Router), params.amountToTrade);
+
+        address[] memory path1 = new address[](2);
+        path1[0] = params.assetToFlashLoan;
+        path1[1] = params.targetAsset;
+
+        // Perform Trade 1 (Base Asset -> Target Asset)
+        uniswapV2Router.swapExactTokensForTokens(
+            params.amountToTrade,
+            0, // Accept any amount out for the first leg, or calculate minimum acceptable
+            path1,
+            address(this),
             deadline
-        ){
-        } catch {
-            // error handling when arb failed due to trade 1
-        }
-        
-        // Re-checking prior to execution since the NodeJS bot that instantiated this contract would have checked already
-        uint256 tokenAmountInWEI = tokensOut.mul(1000000000000000000); //convert into Wei
-        uint256 estimatedETH = getEstimatedETHForToken(tokensOut, daiTokenAddress)[0]; // check how much ETH you'll get for x number of ERC20 token
-        
-        // grant uniswap / sushiswap access to your token, DAI used since we're swapping DAI back into ETH
-        dai.approve(address(uniswapV2Router), tokenAmountInWEI);
-        dai.approve(address(sushiswapV1Router), tokenAmountInWEI);
+        );
 
-        // Trade 2: Execute swap of the ERC20 token back into ETH on Sushiswap to complete the arb
-        try sushiswapV1Router.swapExactTokensForETH (
-            tokenAmountInWEI, 
-            estimatedETH, 
-            getPathForTokenToETH(daiTokenAddress), 
-            address(this), 
+        // Check how much Target Asset we actually received
+        uint256 targetAssetBalance = targetAsset.balanceOf(address(this));
+
+        // --- TRADE 2: SUSHISWAP ---
+        // Approve Sushiswap to spend the newly acquired target asset
+        targetAsset.approve(address(sushiswapV1Router), targetAssetBalance);
+
+        address[] memory path2 = new address[](2);
+        path2[0] = params.targetAsset;
+        path2[1] = params.assetToFlashLoan;
+
+        // Perform Trade 2 (Target Asset -> Base Asset)
+        sushiswapV1Router.swapExactTokensForTokens(
+            targetAssetBalance,
+            0, // Must calculate minimum output to ensure profitability!
+            path2,
+            address(this),
             deadline
-        ){
-        } catch {
-            // error handling when arb failed due to trade 2    
+        );
+    }
+
+    /**
+     * @dev Withdraws all tokens and ETH back to the owner (Fix for Bug #2)
+     */
+    function withdrawBalance(address _tokenAddress) external onlyOwner {
+        if (_tokenAddress == address(0)) {
+            // Withdraw ETH
+            (bool success, ) = msg.sender.call{value: address(this).balance}("");
+            require(success, "ETH transfer failed");
+        } else {
+            // Withdraw ERC20
+            IERC20 token = IERC20(_tokenAddress);
+            token.transfer(msg.sender, token.balanceOf(address(this)));
         }
     }
 
-    /**
-        sweep entire balance on the arb contract back to contract owner
-     */
-    function WithdrawBalance() private payable onlyOwner {
-        
-        // withdraw all ETH
-        msg.sender.call{ value: address(this).balance }("");
-        
-        // withdraw all x ERC20 tokens
-        dai.transfer(msg.sender, dai.balanceOf(address(this)));
-    }
-
-    /**
-        Flash loan x amount of wei's worth of `_flashAsset`
-        e.g. 1 ether = 1000000000000000000 wei
-     */
-    function flashloan (
-        address _flashAsset, 
-        uint _flashAmount,
-        address _daiTokenAddress,
-        uint _amountToTrade,
-        uint256 _tokensOut
-        ) public onlyOwner {
-            
-        bytes memory data = "";
-
-        daiTokenAddress = address(_daiTokenAddress);
-        dai = IERC20(daiTokenAddress);
-        
-        amountToTrade = _amountToTrade; // how much wei you want to trade
-        tokensOut = _tokensOut; // how many tokens you want converted on the return trade     
-
-        // call lending pool to commence flash loan
-        ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
-        lendingPool.flashLoan(address(this), _flashAsset, uint(_flashAmount), data);
-    }
-
-    /**
-        Using a WETH wrapper here since there are no direct ETH pairs in Uniswap v2
-        and sushiswap v1 is based on uniswap v2
-     */
-    function getPathForETHToToken(address ERC20Token) private view returns (address[] memory) {
-        address[] memory path = new address[](2);
-        path[0] = uniswapV2Router.WETH();
-        path[1] = ERC20Token;
-    
-        return path;
-    }
-
-    /**
-        Using a WETH wrapper to convert ERC20 token back into ETH
-     */
-     function getPathForTokenToETH(address ERC20Token) private view returns (address[] memory) {
-        address[] memory path = new address[](2);
-        path[0] = ERC20Token;
-        path[1] = sushiswapV1Router.WETH();
-        
-        return path;
-    }
-
-    /**
-        helper function to check ERC20 to ETH conversion rate
-     */
-    function getEstimatedETHForToken(uint _tokenAmount, address ERC20Token) public view returns (uint[] memory) {
-        return uniswapV2Router.getAmountsOut(_tokenAmount, getPathForTokenToETH(ERC20Token));
-    }
+    // Required to receive ETH
+    receive() external payable {}
 }
