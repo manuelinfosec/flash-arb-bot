@@ -1,0 +1,25 @@
+{
+  "name": "flash-arb-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aave V3 flash-loan arbitrage bot for Arbitrum: zero-principal on-chain swaps triggered by an off-chain DEX price scanner.",
+  "license": "MIT",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.js --network arbitrum",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network arbitrumSepolia",
+    "scan": "node bot/index.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0",
+    "solc": "^0.8.20"
+  },
+  "dependencies": {
+    "@aave/core-v3": "^1.19.3",
+    "@openzeppelin/contracts": "^5.0.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.0"
+  }
+}

@@ -1,0 +1,44 @@
+name: Flash arb scan
+
+on:
+  # Runs on a schedule (UTC, GitHub's cron). Every 10 minutes is a reasonable free-tier default -
+  # tighten it once you've confirmed the bot behaves the way you expect. GitHub Actions schedules
+  # can lag a few minutes under load, so treat this as "roughly every 10 minutes", not exact.
+  schedule:
+    - cron: "*/10 * * * *"
+  # Lets you trigger a run by hand from the Actions tab (works fine from mobile Safari/GitHub app).
+  workflow_dispatch: {}
+
+# Skip overlapping runs instead of piling them up if one run is slow.
+concurrency:
+  group: flash-arb-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Run scanner
+        env:
+          ARBITRUM_RPC_URL: ${{ secrets.ARBITRUM_RPC_URL }}
+          DRY_RUN: ${{ secrets.DRY_RUN || 'true' }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+          AAVE_FLASH_LOAN_PREMIUM_BPS: ${{ secrets.AAVE_FLASH_LOAN_PREMIUM_BPS || '5' }}
+          MIN_PROFIT_USD: ${{ secrets.MIN_PROFIT_USD || '5' }}
+          MIN_PROFIT_BUFFER_BPS: ${{ secrets.MIN_PROFIT_BUFFER_BPS || '5000' }}
+          SLIPPAGE_BPS: ${{ secrets.SLIPPAGE_BPS || '50' }}
+          GAS_LIMIT_ESTIMATE: ${{ secrets.GAS_LIMIT_ESTIMATE || '700000' }}
+          GAS_PRICE_BUFFER_PCT: ${{ secrets.GAS_PRICE_BUFFER_PCT || '20' }}
+          ETH_USD_ROUTE_JSON: ${{ secrets.ETH_USD_ROUTE_JSON }}
+          PAIRS_CONFIG_JSON: ${{ secrets.PAIRS_CONFIG_JSON }}
+        run: npm run scan

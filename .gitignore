@@ -1,1 +1,18 @@
 .gitattributes
+
+# dependencies
+node_modules/
+
+# hardhat
+artifacts/
+cache/
+typechain-types/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+logs/

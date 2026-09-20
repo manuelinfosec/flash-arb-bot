@@ -1,0 +1,38 @@
+name: Deploy FlashArbExecutor
+
+# Manual-only, so you can deploy entirely from the GitHub Actions "Run workflow" button (works
+# fine from mobile Safari or the GitHub mobile app) - no terminal or computer needed. The deployed
+# contract address is printed in the run's log; copy it into your PRIVATE_KEY/CONTRACT_ADDRESS
+# secrets used by scan.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "Network to deploy to"
+        required: true
+        default: "arbitrumSepolia"
+        type: choice
+        options:
+          - arbitrumSepolia
+          - arbitrum
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Deploy
+        env:
+          ARBITRUM_RPC_URL: ${{ secrets.ARBITRUM_RPC_URL }}
+          ARBITRUM_SEPOLIA_RPC_URL: ${{ secrets.ARBITRUM_SEPOLIA_RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          AAVE_POOL_ADDRESSES_PROVIDER: ${{ secrets.AAVE_POOL_ADDRESSES_PROVIDER }}
+        run: npx hardhat run scripts/deploy.js --network ${{ inputs.network }}
